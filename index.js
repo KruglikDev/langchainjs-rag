@@ -135,16 +135,16 @@ const pdfQa = await initPdfQA({
     pdfDocument: pdfDocumentPath,
     chunkSize: 1000,
     chunkOverlap: 0,
-    searchType: 'similarity',
+    searchType: 'mmr',
     kDocuments: 5
 });
 
 //////////////// EXAMPLES
-const firstQuestion = "What is the capital of UK?";
+const firstQuestion = "Can I make PyCharm to open files by default?";
 const firstAnswer = await askQuestion(pdfQa, firstQuestion);
 console.log(firstAnswer);
 
-const followUpQuestion = "What is the population of the capital?";
+const followUpQuestion = "What was my previous question?";
 const secondAnswer = await askQuestion(pdfQa, followUpQuestion);
 console.log(secondAnswer);
 
