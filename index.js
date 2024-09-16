@@ -5,6 +5,7 @@ import {CharacterTextSplitter} from "@langchain/textsplitters";
 import {MemoryVectorStore} from 'langchain/vectorstores/memory';
 import { createRetrievalChain } from "langchain/chains/retrieval";
 import { createStuffDocumentsChain } from "langchain/chains/combine_documents";
+import {ChatPromptTemplate} from "@langchain/core/prompts";
 
 const pdfDocumentPath = "./materials/pycharm-documentation-mini.pdf";
 const selectEmbedding = new OllamaEmbeddings({model: 'all-minilm:latest'})
@@ -26,7 +27,8 @@ async function initPdfQA({ model, pdfDocument, chunkSize, chunkOverlap, kDocumen
     const texts = await splitDocuments({documents, chunkSize, chunkOverlap});
     const db = await createVectorStore(texts);
     const retriever = createRetriever({db, kDocuments, searchType})
-    return { llm, documents, texts, db, retriever };
+    const chain = await createChain({llm, retriever});
+    return { llm, documents, texts, db, retriever, chain };
 }
 
 // Разбивает документ на небольшие чанки для ,
@@ -59,24 +61,33 @@ function createRetriever({db, searchType, kDocuments}){
     });
 }
 
-// async function createChain(texts) {
-//     console.log('Creating retrieval QA chain...');
-//
-//     // Объединяет и обрабатывает документы, чтобы подготовить их к передаче в языковую модель.
-//     // После извлечения из стора документов Ретривером, их нужно объединить и отформатировать в единый текстовый блок,
-//     // который будет передан языковой модели для генерации ответа
-//     const combineDocsChain = await createStuffDocumentsChain({
-//         model: llm,
-//         prompt: `Answer the user's question based on the following context: {context}`,
-//     });
-//
-//
-//     // Create the retrieval chain
-//     const retrievalChain = createRetrievalChain({
-//         retriever,
-//         combineDocsChain,
-//     });
-// }
+async function createChain({llm, retriever}) {
+    console.log('Creating retrieval QA chain...');
+
+    const questionAnsweringPrompt = ChatPromptTemplate.fromMessages([
+        [
+            "system",
+            "You are an expert in AI topics. You are provided multiple context items that are related to the prompt you have to answer. Use the following pieces of context to answer the question at the end.\n\n{context}",
+        ],
+        ["human", "{input}"],
+    ]);
+
+    // Объединяет и обрабатывает документы, чтобы подготовить их к передаче в языковую модель.
+    // После извлечения из стора документов Ретривером, их нужно объединить и отформатировать в единый текстовый блок,
+    // который будет передан языковой модели для генерации ответа
+    const combineDocsChain = await createStuffDocumentsChain({
+        llm: llm,
+        prompt: questionAnsweringPrompt,
+    });
+
+    // Create the retrieval chain
+    const retrievalChain = createRetrievalChain({
+        retriever,
+        combineDocsChain,
+    });
+
+    return retrievalChain;
+}
 
 const pdfQa = await initPdfQA({
     model: "llama3",
@@ -87,8 +98,9 @@ const pdfQa = await initPdfQA({
     kDocuments: 5
 });
 
-const relevantDocuments = await pdfQa.retriever.invoke("What can you do with AI assistant?");
-console.log(relevantDocuments[0].pageContent);
+// const relevantDocuments = await pdfQa.retriever.invoke("What can you do with AI assistant?");
+const data = await pdfQa.chain.invoke({input: "What can you do with AI assistant?"});
+console.log(data.answer);
 
 // Поиск по эмбеддингам, ищет не дословно, а по релевантности
 // const similaritySearchResults = await pdfQa.db.similaritySearch("File type associations", 10);
