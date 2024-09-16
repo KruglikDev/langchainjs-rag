@@ -1,14 +1,24 @@
-import {Ollama, OllamaEmbeddings} from "@langchain/ollama";
-import {PDFLoader} from "@langchain/community/document_loaders/fs/pdf";
+import { Ollama, OllamaEmbeddings } from "@langchain/ollama";
+import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import path from "node:path";
-import {CharacterTextSplitter} from "@langchain/textsplitters";
-import {MemoryVectorStore} from 'langchain/vectorstores/memory';
+import { CharacterTextSplitter } from "@langchain/textsplitters";
+import { MemoryVectorStore } from 'langchain/vectorstores/memory';
 import { createRetrievalChain } from "langchain/chains/retrieval";
 import { createStuffDocumentsChain } from "langchain/chains/combine_documents";
-import {ChatPromptTemplate} from "@langchain/core/prompts";
+import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
+import { HumanMessage, AIMessage } from "@langchain/core/messages";
 
 const pdfDocumentPath = "./materials/pycharm-documentation-mini.pdf";
-const selectEmbedding = new OllamaEmbeddings({model: 'all-minilm:latest'})
+const selectEmbedding = new OllamaEmbeddings({model: 'all-minilm:latest'});
+
+const questionAnsweringPrompt = ChatPromptTemplate.fromMessages([
+    [
+        "system",
+        "You are an expert in AI topics. You are provided multiple context items that are related to the prompt you have to answer. Use the following pieces of context to answer the question at the end.\n\n{context}",
+    ],
+    new MessagesPlaceholder("chat_history"),
+    ["human", "{input}"],
+]);
 
 function initChatModel(model) {
     console.log("Loading model...");
@@ -28,31 +38,27 @@ async function initPdfQA({ model, pdfDocument, chunkSize, chunkOverlap, kDocumen
     const db = await createVectorStore(texts);
     const retriever = createRetriever({db, kDocuments, searchType})
     const chain = await createChain({llm, retriever});
-    return { llm, documents, texts, db, retriever, chain };
+
+    const chatHistory = [];
+
+    return { llm, documents, texts, db, retriever, chain, chatHistory };
 }
 
-// Разбивает документ на небольшие чанки для ,
-// т.к. у llm есть ограничение на количество обрабатываемых токенов за раз
 async function splitDocuments({documents, chunkSize, chunkOverlap}) {
     console.log("Splitting PDFs...");
     const splitter = new CharacterTextSplitter({
         separator: " ",
         chunkSize,
         chunkOverlap,
-    })
-    return await splitter.splitDocuments(documents)
+    });
+    return await splitter.splitDocuments(documents);
 }
 
-// Векторное хранилище, где чанки сохраняются как эмбеддинги
 async function createVectorStore(texts) {
     console.log('Creating document embeddings...');
-
     return await MemoryVectorStore.fromDocuments(texts, selectEmbedding);
 }
 
-// Функция: createRetriever создает объект, который позволяет искать по векторному хранилищу документов.
-// Этот объект отвечает за извлечение наиболее релевантных документов из хранилища на основе заданного запроса.
-// Он использует метод поиска (например, по схожести) для нахождения документов, которые лучше всего соответствуют запросу пользователя.
 function createRetriever({db, searchType, kDocuments}){
     console.log("Initialize vector store retriever...");
     return db.asRetriever({
@@ -63,30 +69,34 @@ function createRetriever({db, searchType, kDocuments}){
 
 async function createChain({llm, retriever}) {
     console.log('Creating retrieval QA chain...');
-
-    const questionAnsweringPrompt = ChatPromptTemplate.fromMessages([
-        [
-            "system",
-            "You are an expert in AI topics. You are provided multiple context items that are related to the prompt you have to answer. Use the following pieces of context to answer the question at the end.\n\n{context}",
-        ],
-        ["human", "{input}"],
-    ]);
-
-    // Объединяет и обрабатывает документы, чтобы подготовить их к передаче в языковую модель.
-    // После извлечения из стора документов Ретривером, их нужно объединить и отформатировать в единый текстовый блок,
-    // который будет передан языковой модели для генерации ответа
     const combineDocsChain = await createStuffDocumentsChain({
         llm: llm,
         prompt: questionAnsweringPrompt,
     });
 
-    // Create the retrieval chain
     const retrievalChain = createRetrievalChain({
         retriever,
         combineDocsChain,
     });
 
     return retrievalChain;
+}
+
+// Function to invoke the chain with chat history and update it
+async function askQuestion(pdfQa, question) {
+    const { chain, chatHistory } = pdfQa;
+
+    // Invoke the chain with the current question and chat history
+    const result = await chain.invoke({
+        input: question,
+        chat_history: chatHistory // Pass in the chat history
+    });
+
+    // Store the new question and answer in the chat history using HumanMessage and AIMessage
+    chatHistory.push(new HumanMessage(question));
+    chatHistory.push(new AIMessage(result.answer));
+
+    return result.answer;
 }
 
 const pdfQa = await initPdfQA({
@@ -98,9 +108,15 @@ const pdfQa = await initPdfQA({
     kDocuments: 5
 });
 
-// const relevantDocuments = await pdfQa.retriever.invoke("What can you do with AI assistant?");
-const data = await pdfQa.chain.invoke({input: "What can you do with AI assistant?"});
-console.log(data.answer);
+// Example of asking questions and updating the chat history
+const firstQuestion = "What is the capital of UK?";
+const firstAnswer = await askQuestion(pdfQa, firstQuestion);
+console.log(firstAnswer);
+
+const followUpQuestion = "What is the population of the capital?";
+const secondAnswer = await askQuestion(pdfQa, followUpQuestion);
+console.log(secondAnswer);
+
 
 // Поиск по эмбеддингам, ищет не дословно, а по релевантности
 // const similaritySearchResults = await pdfQa.db.similaritySearch("File type associations", 10);
