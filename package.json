@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "@langchain/community": "^0.3.0",
-    "@langchain/ollama": "^0.1.0"
+    "@langchain/ollama": "^0.1.0",
+    "pdf-parse": "^1.1.1"
   }
 }
